@@ -64,9 +64,6 @@ spec:
           image: "{{ .Values.certExporter.image.repository }}:{{ .Values.certExporter.image.tag }}"
           args:
             - --watch-kube-secrets
-            {{- range .Values.certExporter.secretTypes }}
-            - --secret-type={{ . }}
-            {{- end }}
             - --listen-address=:9793
           ports:
             - name: http-metrics
