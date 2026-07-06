@@ -74,7 +74,7 @@ data:
         tls:
           insecure: true
         headers:
-          Authorization: {{ printf "Bearer %s" .Values.clickstack.apiKey | quote }}
+          Authorization: {{ .Values.clickstack.apiKey | quote }}
 
     service:
       telemetry:
