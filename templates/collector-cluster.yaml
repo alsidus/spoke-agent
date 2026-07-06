@@ -1,0 +1,178 @@
+{{- $scrape := or .Values.metrics.kubeState .Values.metrics.coreDns .Values.metrics.certExporter .Values.metrics.controlPlane -}}
+{{- if or $scrape .Values.events.enabled }}
+# =============================================================================
+# Cluster-singleton collector (Deployment): scrapes cluster-scoped exporters
+# (kube-state-metrics, CoreDNS, cert-exporter, control-plane) and watches
+# Kubernetes events. Single replica so nothing is double-counted.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickstack-agent.name" . }}-cluster
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clickstack-agent.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    receivers:
+      {{- if $scrape }}
+      prometheus:
+        config:
+          scrape_configs:
+            {{- if .Values.metrics.kubeState }}
+            - job_name: kube-state-metrics
+              scrape_interval: 30s
+              static_configs:
+                - targets: [ "{{ include "clickstack-agent.name" . }}-kube-state-metrics.{{ .Release.Namespace }}.svc:8080" ]
+            {{- end }}
+            {{- if .Values.metrics.coreDns }}
+            - job_name: coredns
+              scrape_interval: 30s
+              kubernetes_sd_configs:
+                - role: endpoints
+                  namespaces:
+                    names: [ kube-system ]
+              relabel_configs:
+                - source_labels: [ __meta_kubernetes_service_name ]
+                  regex: kube-dns
+                  action: keep
+                - source_labels: [ __meta_kubernetes_endpoint_port_name ]
+                  regex: metrics
+                  action: keep
+            {{- end }}
+            {{- if .Values.metrics.certExporter }}
+            - job_name: cert-exporter
+              scrape_interval: 60s
+              static_configs:
+                - targets: [ "{{ include "clickstack-agent.name" . }}-cert-exporter.{{ .Release.Namespace }}.svc:8080" ]
+            {{- end }}
+            {{- if .Values.metrics.controlPlane }}
+            - job_name: kubernetes-apiservers
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                insecure_skip_verify: true
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              kubernetes_sd_configs:
+                - role: endpoints
+                  namespaces:
+                    names: [ default ]
+              relabel_configs:
+                - source_labels: [ __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name ]
+                  regex: kubernetes;https
+                  action: keep
+            - job_name: kubelet
+              scheme: https
+              tls_config:
+                ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                insecure_skip_verify: true
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              kubernetes_sd_configs:
+                - role: node
+              relabel_configs:
+                - action: labelmap
+                  regex: __meta_kubernetes_node_label_(.+)
+                - target_label: __address__
+                  replacement: kubernetes.default.svc:443
+                - source_labels: [ __meta_kubernetes_node_name ]
+                  regex: (.+)
+                  target_label: __metrics_path__
+                  replacement: /api/v1/nodes/${1}/proxy/metrics
+            {{- with .Values.metrics.controlPlaneStaticTargets.scheduler }}
+            - job_name: kube-scheduler
+              scheme: https
+              tls_config: { insecure_skip_verify: true }
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              static_configs:
+                - targets: {{ toJson . }}
+            {{- end }}
+            {{- with .Values.metrics.controlPlaneStaticTargets.controllerManager }}
+            - job_name: kube-controller-manager
+              scheme: https
+              tls_config: { insecure_skip_verify: true }
+              bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+              static_configs:
+                - targets: {{ toJson . }}
+            {{- end }}
+            {{- with .Values.metrics.controlPlaneStaticTargets.etcd }}
+            - job_name: etcd
+              scheme: http
+              static_configs:
+                - targets: {{ toJson . }}
+            {{- end }}
+            {{- end }}
+      {{- end }}
+      {{- if .Values.events.enabled }}
+      k8sobjects:
+        auth_type: serviceAccount
+        objects:
+          - name: events
+            mode: watch
+            group: events.k8s.io
+      {{- end }}
+
+    processors:
+      {{- include "clickstack-agent.processors" . | nindent 6 }}
+
+    exporters:
+      otlphttp:
+        endpoint: {{ .Values.clickstack.endpoint | quote }}
+        tls:
+          insecure: true
+
+    service:
+      telemetry:
+        metrics:
+          level: none
+      pipelines:
+        {{- if $scrape }}
+        metrics:
+          receivers: [ prometheus ]
+          processors: [ memory_limiter, k8sattributes, resource, batch ]
+          exporters: [ otlphttp ]
+        {{- end }}
+        {{- if .Values.events.enabled }}
+        logs:
+          receivers: [ k8sobjects ]
+          processors: [ memory_limiter, resource, batch ]
+          exporters: [ otlphttp ]
+        {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clickstack-agent.name" . }}-cluster
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clickstack-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cluster-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: clickstack-agent
+      app.kubernetes.io/component: cluster-collector
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: clickstack-agent
+        app.kubernetes.io/component: cluster-collector
+      annotations:
+        checksum/config: {{ toYaml .Values | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "clickstack-agent.name" . }}
+      containers:
+        - name: collector
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [ "--config=/etc/otel/config.yaml" ]
+          resources:
+            {{- toYaml .Values.resources.deployment | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "clickstack-agent.name" . }}-cluster
+{{- end }}

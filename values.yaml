@@ -1,0 +1,71 @@
+# =============================================================================
+# clickstack-agent — values
+# =============================================================================
+# Every telemetry signal is an independent on/off toggle. Turn a signal off and
+# its receiver, pipeline, and any helper workload disappear from the render.
+# =============================================================================
+
+# --- Central ClickStack ingest ----------------------------------------------
+# We ship over OTLP/HTTP (4318), NOT gRPC. gRPC through an nginx Ingress needs
+# TLS/HTTP2; OTLP/HTTP works cleanly over plain HTTP, which matches the
+# "no TLS for now" decision.
+clickstack:
+  endpoint: "http://otel-http.prod"
+
+# --- Spoke identity (drives labels) -----------------------------------------
+# name -> becomes k8s.cluster.name on EVERY signal. Correlation breaks without
+# it. The ApplicationSet overrides this per-cluster from the Argo CD cluster
+# secret label `clickstack.io/cluster-name`.
+cluster:
+  name: "REPLACE_ME"
+  environment: "prod"
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.115.0"
+  pullPolicy: IfNotPresent
+
+# --- Signal toggles ("tick yes to ship") ------------------------------------
+metrics:
+  node: true           # 1  hostmetrics        (DaemonSet)
+  container: true      # 4  kubeletstats        (DaemonSet)
+  kubeState: true      # 2  kube-state-metrics  (Deployment scrape)
+  coreDns: true        # 6  CoreDNS :9153       (Deployment scrape)
+  certExporter: true   # 7  cert-exporter       (Deployment scrape)
+  controlPlane: false  # 3  apiserver/kubelet/etcd/scheduler/cm (Talos: needs
+                       #    metrics endpoints exposed via machine config first)
+  # Best-effort static targets for scheduler/controller-manager/etcd on Talos.
+  # Only used when controlPlane=true. Fill with node IPs once exposed.
+  controlPlaneStaticTargets:
+    scheduler: []            # e.g. ["10.0.0.10:10259"]
+    controllerManager: []    # e.g. ["10.0.0.10:10257"]
+    etcd: []                 # e.g. ["10.0.0.10:2381"]
+
+logs:
+  allNamespaces: true        # 5  filelog on every node (DaemonSet)
+  excludeNamespaces: []      # e.g. ["kube-system"] to drop noisy namespaces
+
+events:
+  enabled: true              # Kubernetes events -> logs (very high RCA value)
+
+# --- Helper workload images -------------------------------------------------
+kubeStateMetrics:
+  image:
+    repository: registry.k8s.io/kube-state-metrics/kube-state-metrics
+    tag: "v2.13.0"
+
+certExporter:
+  image:
+    repository: ghcr.io/joe-elliott/cert-exporter
+    tag: "2.20.0"
+  # Watch all Kubernetes TLS secrets for expiry (generic, works on any cluster).
+  secretsGlobs: "*.crt,*.pem,tls.crt,ca.crt"
+
+# --- Collector resources ----------------------------------------------------
+resources:
+  daemonset:
+    limits: { cpu: "500m", memory: "512Mi" }
+    requests: { cpu: "100m", memory: "128Mi" }
+  deployment:
+    limits: { cpu: "1", memory: "1Gi" }
+    requests: { cpu: "200m", memory: "256Mi" }
