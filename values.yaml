@@ -49,6 +49,23 @@ logs:
 events:
   enabled: true              # Kubernetes events -> logs (very high RCA value)
 
+# --- Application telemetry (OTLP gateway) ------------------------------------
+# In-cluster apps send OTLP to the clickstack-agent-otlp Service. Traces are the
+# headline app-level signal; app-emitted OTLP metrics/logs carry trace context
+# and ride the same gateway, so app spans/metrics/logs correlate with the infra
+# node + container + kubernetes signals. Stateless Deployment -> scale replicas.
+traces:
+  enabled: true              # 8  OTLP gateway (Deployment) for app spans
+  replicas: 2                # stateless; scale out for trace volume + HA
+  appMetrics: true           # also accept app-emitted OTLP metrics via gateway
+  appLogs: true              # also accept app-emitted OTLP logs via gateway
+  spanMetrics: true          # derive RED metrics (calls + duration) from spans,
+                             # spoke-side. The service GRAPH is built server-side
+                             # by ClickStack from stored spans (see README).
+  otlp:
+    grpcPort: 4317
+    httpPort: 4318
+
 # --- Helper workload images -------------------------------------------------
 kubeStateMetrics:
   image:

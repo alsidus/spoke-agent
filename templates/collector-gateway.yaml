@@ -1,0 +1,161 @@
+{{- if .Values.traces.enabled }}
+# =============================================================================
+# OTLP gateway collector (Deployment): in-cluster entrypoint for APP telemetry.
+# =============================================================================
+# Instrumented apps send OTLP to the `{{ include "clickstack-agent.name" . }}-otlp`
+# Service (gRPC :{{ .Values.traces.otlp.grpcPort }} / HTTP :{{ .Values.traces.otlp.httpPort }}).
+# Traces are the headline new signal; app-emitted OTLP metrics/logs (which carry
+# trace context) ride the same gateway so app spans, app metrics and app logs
+# all get the identical k8s + cluster identity and correlate with the infra
+# logs/metrics the node & cluster collectors already ship.
+#
+# Stateless -> scale horizontally with traces.replicas. k8sattributes resolves
+# the sending pod from the connection source IP (pod_association `connection`).
+#
+# App config: OTEL_EXPORTER_OTLP_ENDPOINT=http://{{ include "clickstack-agent.name" . }}-otlp.{{ .Release.Namespace }}.svc:{{ .Values.traces.otlp.httpPort }}
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "clickstack-agent.name" . }}-otlp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clickstack-agent.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:{{ .Values.traces.otlp.grpcPort }}
+          http:
+            endpoint: 0.0.0.0:{{ .Values.traces.otlp.httpPort }}
+
+    processors:
+      {{- include "clickstack-agent.processors" . | nindent 6 }}
+
+    exporters:
+      otlphttp:
+        endpoint: {{ .Values.clickstack.endpoint | quote }}
+        tls:
+          insecure: true
+        headers:
+          Authorization: {{ .Values.clickstack.apiKey | quote }}
+
+    {{- if .Values.traces.spanMetrics }}
+    connectors:
+      # Derives RED metrics (calls + duration histogram) per service from the
+      # spans flowing through this gateway. Runs spoke-side: no span pairing is
+      # needed, so replicas are safe. Delta temporality => the central store sums
+      # the partial series from each replica correctly. The SERVICE GRAPH itself
+      # is built server-side by ClickStack from stored spans (only the centre
+      # sees cross-cluster edges), so we intentionally do NOT run a servicegraph
+      # connector here.
+      spanmetrics:
+        histogram:
+          explicit:
+            buckets: [ 5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s, 10s ]
+        dimensions:
+          - name: http.request.method
+          - name: http.response.status_code
+          - name: k8s.namespace.name
+          - name: k8s.deployment.name
+        exemplars:
+          enabled: true
+        aggregation_temporality: AGGREGATION_TEMPORALITY_DELTA
+        metrics_flush_interval: 15s
+    {{- end }}
+
+    service:
+      telemetry:
+        metrics:
+          level: none
+      pipelines:
+        traces:
+          receivers: [ otlp ]
+          processors: [ memory_limiter, k8sattributes, resource, batch ]
+          exporters: [ otlphttp{{ if .Values.traces.spanMetrics }}, spanmetrics{{ end }} ]
+        {{- if .Values.traces.spanMetrics }}
+        # RED metrics generated from spans -> central. Resource attributes
+        # (k8s.*, k8s.cluster.name) carry over from the already-enriched spans.
+        metrics/spanmetrics:
+          receivers: [ spanmetrics ]
+          processors: [ memory_limiter, batch ]
+          exporters: [ otlphttp ]
+        {{- end }}
+        {{- if .Values.traces.appMetrics }}
+        metrics:
+          receivers: [ otlp ]
+          processors: [ memory_limiter, k8sattributes, resource, batch ]
+          exporters: [ otlphttp ]
+        {{- end }}
+        {{- if .Values.traces.appLogs }}
+        logs:
+          receivers: [ otlp ]
+          processors: [ memory_limiter, k8sattributes, resource, batch ]
+          exporters: [ otlphttp ]
+        {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "clickstack-agent.name" . }}-gateway
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clickstack-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otlp-gateway
+spec:
+  replicas: {{ .Values.traces.replicas }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: clickstack-agent
+      app.kubernetes.io/component: otlp-gateway
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: clickstack-agent
+        app.kubernetes.io/component: otlp-gateway
+      annotations:
+        checksum/config: {{ toYaml .Values | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "clickstack-agent.name" . }}
+      containers:
+        - name: collector
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [ "--config=/etc/otel/config.yaml" ]
+          ports:
+            - name: otlp-grpc
+              containerPort: {{ .Values.traces.otlp.grpcPort }}
+            - name: otlp-http
+              containerPort: {{ .Values.traces.otlp.httpPort }}
+          resources:
+            {{- toYaml .Values.resources.deployment | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "clickstack-agent.name" . }}-otlp
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "clickstack-agent.name" . }}-otlp
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "clickstack-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otlp-gateway
+spec:
+  selector:
+    app.kubernetes.io/name: clickstack-agent
+    app.kubernetes.io/component: otlp-gateway
+  ports:
+    - name: otlp-grpc
+      port: {{ .Values.traces.otlp.grpcPort }}
+      targetPort: {{ .Values.traces.otlp.grpcPort }}
+    - name: otlp-http
+      port: {{ .Values.traces.otlp.httpPort }}
+      targetPort: {{ .Values.traces.otlp.httpPort }}
+{{- end }}

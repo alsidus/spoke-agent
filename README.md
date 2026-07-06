@@ -3,7 +3,11 @@
 Modular OpenTelemetry telemetry agent for **ClickStack spoke clusters**. Ships
 node, container, kube-state, CoreDNS, control-plane and certificate metrics plus
 all pod logs and Kubernetes events to a central ClickStack, fully labelled with
-`k8s.*` resource attributes for correlation.
+`k8s.*` resource attributes for correlation. It also runs an in-cluster **OTLP
+gateway** so instrumented applications can push **traces** (and app-emitted OTLP
+metrics/logs) that carry the same `k8s.*` + `k8s.cluster.name` identity — letting
+you correlate app-level spans with the underlying node/container/kubernetes
+signals during root-cause analysis.
 
 This repository is the **source of truth Argo CD pulls** to install the agent on
 each spoke cluster (via the `clickstack-spokes` ApplicationSet on the hub).
@@ -17,6 +21,7 @@ templates/
   rbac.yaml           # collector ServiceAccount + read-only ClusterRole
   collector-node.yaml # DaemonSet: pod logs, hostmetrics, kubeletstats
   collector-cluster.yaml # Deployment: KSM/CoreDNS/cert/control-plane scrape + k8s events
+  collector-gateway.yaml # Deployment: OTLP gateway for app traces/metrics/logs (gated on traces.enabled)
   kube-state-metrics.yaml # gated on metrics.kubeState
   cert-exporter.yaml  # gated on metrics.certExporter
   _helpers.tpl        # shared k8sattributes + resource processors

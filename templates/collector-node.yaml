@@ -16,7 +16,7 @@ data:
       filelog:
         include: [ /var/log/pods/*/*/*.log ]
         exclude:
-          - /var/log/pods/*/{{ include "clickstack-agent.name" . }}*/*.log
+          - /var/log/pods/*_{{ include "clickstack-agent.name" . }}*/*/*.log
           {{- range .Values.logs.excludeNamespaces }}
           - /var/log/pods/{{ . }}_*/*/*.log
           {{- end }}
