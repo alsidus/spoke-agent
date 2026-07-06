@@ -119,6 +119,8 @@ data:
         endpoint: {{ .Values.clickstack.endpoint | quote }}
         tls:
           insecure: true
+        headers:
+          Authorization: {{ printf "Bearer %s" .Values.clickstack.apiKey | quote }}
 
     service:
       telemetry:

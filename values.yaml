@@ -11,6 +11,7 @@
 # "no TLS for now" decision.
 clickstack:
   endpoint: "http://otel-http.prod"
+  apiKey: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 # --- Spoke identity (drives labels) -----------------------------------------
 # name -> becomes k8s.cluster.name on EVERY signal. Correlation breaks without
