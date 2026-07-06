@@ -63,12 +63,14 @@ spec:
         - name: cert-exporter
           image: "{{ .Values.certExporter.image.repository }}:{{ .Values.certExporter.image.tag }}"
           args:
-            - --secrets-include-glob={{ .Values.certExporter.secretsGlobs }}
-            - --secrets-annotation-selector=
-            - --listen-address=:8080
+            - --watch-kube-secrets
+            {{- range .Values.certExporter.secretTypes }}
+            - --secret-type={{ . }}
+            {{- end }}
+            - --listen-address=:9793
           ports:
             - name: http-metrics
-              containerPort: 8080
+              containerPort: 9793
           resources:
             limits: { cpu: "100m", memory: "128Mi" }
             requests: { cpu: "25m", memory: "32Mi" }
@@ -88,5 +90,5 @@ spec:
   ports:
     - name: http-metrics
       port: 8080
-      targetPort: 8080
+      targetPort: 9793
 {{- end }}

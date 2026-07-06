@@ -22,7 +22,7 @@ cluster:
 
 image:
   repository: otel/opentelemetry-collector-contrib
-  tag: "0.115.0"
+  tag: "0.155.0"
   pullPolicy: IfNotPresent
 
 # --- Signal toggles ("tick yes to ship") ------------------------------------
@@ -56,10 +56,12 @@ kubeStateMetrics:
 
 certExporter:
   image:
-    repository: ghcr.io/joe-elliott/cert-exporter
-    tag: "2.20.0"
-  # Watch all Kubernetes TLS secrets for expiry (generic, works on any cluster).
-  secretsGlobs: "*.crt,*.pem,tls.crt,ca.crt"
+    repository: enix/x509-certificate-exporter
+    tag: "4.1.0"
+  # Kubernetes secret type:key pairs to watch for certificate expiry.
+  secretTypes:
+    - "kubernetes.io/tls:tls.crt"
+    - "kubernetes.io/tls:ca.crt"
 
 # --- Collector resources ----------------------------------------------------
 resources:
